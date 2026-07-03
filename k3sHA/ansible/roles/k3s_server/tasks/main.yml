@@ -1,0 +1,102 @@
+---
+# Rol k3s_server: instalación y configuración del clúster k3s en alta disponibilidad
+
+# Verificar si k3s ya está instalado
+- name: Verificar si k3s ya está instalado
+  stat:
+    path: /usr/local/bin/k3s
+  register: k3s_installed
+
+# Descargar el script de instalación de k3s
+- name: Descargar script de instalación de k3s
+  get_url:
+    url: https://get.k3s.io
+    dest: /tmp/k3s-install.sh
+    mode: '0755'
+  when: not k3s_installed.stat.exists
+
+# Instalar k3s en el primer nodo como servidor inicial del clúster
+- name: Instalar k3s en el primer nodo
+  environment:
+    INSTALL_K3S_EXEC: "--cluster-init --tls-san 192.168.100.100 --tls-san 192.168.100.10 --tls-san 192.168.100.11 --tls-san 192.168.100.12"
+  command: /tmp/k3s-install.sh
+  args:
+    creates: /usr/local/bin/k3s
+  when: inventory_hostname == 'k3s-node1'
+  register: k3s_first_node
+
+# Esperar a que el token del nodo esté disponible en el primer nodo
+- name: Esperar token de k3s en el primer nodo
+  wait_for:
+    path: /var/lib/rancher/k3s/server/node-token
+    state: present
+    timeout: 60
+  when: inventory_hostname == 'k3s-node1'
+
+# Leer el token de unión desde el primer nodo
+- name: Leer token de k3s desde el primer nodo
+  slurp:
+    src: /var/lib/rancher/k3s/server/node-token
+  register: k3s_token_slurp
+  when: inventory_hostname == 'k3s-node1'
+
+# Establecer el token como variable para el primer nodo
+- name: Establecer token de k3s como variable
+  set_fact:
+    k3s_token: "{{ k3s_token_slurp.content | b64decode | trim }}"
+  when: inventory_hostname == 'k3s-node1'
+
+# Compartir el token con los demás nodos del clúster
+- name: Compartir token con los demás nodos
+  set_fact:
+    k3s_token: "{{ hostvars['k3s-node1']['k3s_token'] }}"
+  when: inventory_hostname != 'k3s-node1'
+
+# Validar que el token esté disponible para los nodos adicionales
+- name: Validar token de k3s en nodos adicionales
+  assert:
+    that:
+      - k3s_token is defined
+      - k3s_token | length > 0
+    fail_msg: "Token de k3s no disponible para unir el nodo al clúster"
+  when: inventory_hostname != 'k3s-node1'
+
+# Instalar k3s en los nodos adicionales uniéndolos al clúster
+- name: Instalar k3s en nodos adicionales
+  environment:
+    INSTALL_K3S_EXEC: "--server https://192.168.100.100:6443 --token {{ k3s_token }} --tls-san 192.168.100.100 --tls-san 192.168.100.10 --tls-san 192.168.100.11 --tls-san 192.168.100.12"
+  command: /tmp/k3s-install.sh
+  args:
+    creates: /usr/local/bin/k3s
+  when: inventory_hostname != 'k3s-node1'
+
+# Crear directorio de configuración kube para el usuario del clúster
+- name: Crear directorio kube config
+  file:
+    path: "/home/{{ cluster_user }}/.kube"
+    state: directory
+    owner: "{{ cluster_user }}"
+    group: "{{ cluster_user }}"
+    mode: '0755'
+
+# Copiar el archivo kubeconfig de k3s al directorio del usuario
+- name: Copiar kubeconfig de k3s al usuario
+  copy:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: "/home/{{ cluster_user }}/.kube/config"
+    remote_src: true
+    owner: "{{ cluster_user }}"
+    group: "{{ cluster_user }}"
+    mode: '0600'
+  notify: Actualizar servidor en kubeconfig
+  when: inventory_hostname == 'k3s-node1'
+
+# Agregar variable de entorno KUBECONFIG al bashrc del usuario
+- name: Agregar KUBECONFIG al bashrc
+  lineinfile:
+    path: "/home/{{ cluster_user }}/.bashrc"
+    line: 'export KUBECONFIG=/home/{{ cluster_user }}/.kube/config'
+    create: true
+    owner: "{{ cluster_user }}"
+    group: "{{ cluster_user }}"
+    mode: '0644'

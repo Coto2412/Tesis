@@ -1,0 +1,23 @@
+---
+# Rol haproxy: configuración del balanceador de carga para la API de k3s
+
+# Instalar el paquete haproxy
+- name: Instalar haproxy
+  apt:
+    name: haproxy
+    state: present
+
+# Desplegar la configuración de haproxy desde la plantilla
+- name: Configurar haproxy
+  template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    mode: '0644'
+  notify: Reiniciar haproxy
+
+# Habilitar e iniciar el servicio haproxy
+- name: Habilitar servicio haproxy
+  systemd:
+    name: haproxy
+    enabled: true
+    state: started

@@ -1,0 +1,41 @@
+---
+# Playbook principal para configurar el clúster k3s en alta disponibilidad
+
+# Play 1: configurar nodo principal y levantar el VIP
+- name: Configurar nodo principal del clúster k3s
+  hosts: k3s-node1
+  become: true
+  roles:
+    # Rol de preparación general del sistema
+    - common
+    # Rol de configuración segura de SSH
+    - ssh_config
+    # Rol de configuración de keepalived para IP virtual
+    - keepalived
+    # Rol de configuración de haproxy para balanceo de carga
+    - haproxy
+    # Rol de instalación y configuración de k3s
+    - k3s_server
+  tasks:
+    # Esperar a que la API de k3s responda en el VIP
+    - name: Esperar API de k3s en el VIP
+      wait_for:
+        host: 192.168.100.100
+        port: 6443
+        timeout: 120
+
+# Play 2: unir nodos adicionales usando el VIP
+- name: Configurar nodos adicionales del clúster k3s
+  hosts: k3s-node2:k3s-node3
+  become: true
+  roles:
+    # Rol de preparación general del sistema
+    - common
+    # Rol de configuración segura de SSH
+    - ssh_config
+    # Rol de configuración de keepalived para IP virtual
+    - keepalived
+    # Rol de configuración de haproxy para balanceo de carga
+    - haproxy
+    # Rol de instalación y configuración de k3s
+    - k3s_server
